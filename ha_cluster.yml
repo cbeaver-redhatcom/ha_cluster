@@ -1,0 +1,61 @@
+- name: deploy cluster
+  hosts: nodea nodeb
+  vars:
+    ha_cluster_cluster_name: testcluster
+    ha_cluster_hacluster_password: redhat
+
+  roles:
+    - linux-system-roles.ha_cluster
+
+- name: deploy quorum server
+  hosts: quorum
+  vars:
+    ha_cluster_cluster_present: false
+    ha_cluster_hacluster_password: redhat
+    ha_cluster_qnetd:
+      present: true
+      start_on_boot: true 
+
+  roles:
+    - linux-system-roles.ha_cluster
+
+- name: install quorum pkgs (cluster nodes)
+  hosts: nodea nodeb
+  tasks:
+  - ansible.builtin.dnf:
+      name: corosync-qdevice
+      state: present
+
+- name: install quorum pkgs (quorum node) & initialize qdevice 'net'
+  hosts: quorum
+  vars:
+    quorum_pkgs: [corosync-qnetd]
+    quorum_services: [pcsd]
+  tasks:
+  - ansible.builtin.dnf:
+      name: "{{ quorum_pkgs }}"
+      state: present
+
+  - ansible.builtin.service:
+      name: "{{ item }}"
+      state: started
+      enabled: true 
+    loop: "{{ quorum_services }}"
+
+  - ansible.builtin.command:
+      cmd: pcs qdevice setup model net --enable --start
+
+- name: authorize and add quorum device 
+  hosts: nodea
+  vars:
+    quorum_server: quorum
+    cluster_user: hacluster
+    cluster_password: redhat
+  tasks:
+  - ansible.builtin.command:
+      cmd: "pcs host auth {{ quorum_server }} -u {{ cluster_user }} -p {{ cluster_password }}"
+    tags: cmd
+
+  - ansible.builtin.command:
+      cmd: "pcs quorum device add model net host={{ quorum_server }} algorithm=ffsplit" 
+    tags: cmd
